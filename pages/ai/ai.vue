@@ -115,7 +115,7 @@ const sendMessage = () => {
 
   // 3. 真实调用后端 API，跨越次元壁！
   uni.request({
-    url: 'http://192.168.68.178:8080/api/ai/chat',
+    url: 'http://localhost:8080/api/ai/chat',
     method: 'POST',
     data: { 
       message: userText 
