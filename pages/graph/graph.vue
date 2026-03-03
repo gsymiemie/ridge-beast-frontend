@@ -51,23 +51,22 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, reactive } from 'vue'
 import * as echarts from 'echarts'
 
 const chartRef = ref(null)
-let myChart = null // 存储图表实例，用于切换模式
+let myChart = null 
 
 // 状态控制
-const currentMode = ref('theme') // 默认主题模式
+const currentMode = ref('theme') 
 const showPopup = ref(false)
 const currentNode = ref({})
 
-// 节点详情字典
-const nodeDetailDict = {
-  '嘲风': { desc: '平生好险，威慑邪祟。嘲风以其无畏的姿态镇守于太和殿殿脊之上，不仅增添了殿宇的威严，更寄托了古人辟邪挡灾的美好愿景。', img: '/static/images/chaofeng.jpg' },
-  '螭吻': { desc: '口润嗓粗，避火防灾。相传螭吻乃龙之九子之一，喜好吞火，故被安置于建筑正脊两端，作为镇火的守护神。', img: '/static/images/chiwen.jpg' },
-  '仙人骑凤': { desc: '排头指路，逢凶化吉。传说齐国国君战败被追，遇水阻拦，危急时刻飞来一只凤凰载他渡水。此后仙人骑凤便成了绝处逢生的象征。', img: '/static/images/immortal.jpg' }
-}
+// 🌟 将静态字典改为响应式对象，等待后端数据注入
+const nodeDetailDict = reactive({})
+
+// 存储从后端拉取的真实图谱数据
+const backendGraphData = ref({ nodes: [], links: [] })
 
 const goBack = () => uni.navigateBack()
 const closePopup = () => showPopup.value = false
@@ -76,17 +75,68 @@ const goTo3D = () => {
   setTimeout(() => { uni.redirectTo({ url: '/pages/index/index' }) }, 1000)
 }
 
-// 🌟 模式 A：主题图谱 (树状径向展开结构)
+// 🌐 核心魔法：从 Spring Boot 后端拉取图谱真实数据
+const fetchGraphData = () => {
+  uni.request({
+    url: 'http://localhost:8080/api/graph/data', // 请求咱们刚写的接口
+    method: 'GET',
+    success: (res) => {
+      if (res.data.code === 200) {
+        const { nodes, links } = res.data.data;
+        
+        // 1. 动态生成弹窗字典 (数据驱动弹窗)
+        nodes.forEach(node => {
+          if (node.briefDesc || node.avatarUrl) {
+            nodeDetailDict[node.name] = {
+              desc: node.briefDesc || '这只瑞兽十分神秘，暂无过多记载...',
+              img: node.avatarUrl || '' // 数据库里存的图片路径
+            }
+          }
+        });
+
+        // 2. 格式化节点数据给 ECharts
+        backendGraphData.value.nodes = nodes.map(n => ({
+          name: n.name,
+          symbolSize: n.symbolSize || 50,
+          category: n.category,
+          // 将数据库里的颜色应用到 ECharts 节点样式上
+          itemStyle: { color: n.color || '#eac56b' },
+          label: { color: (n.category === '核心' || n.category === '分类') ? '#fce8b2' : '#1a0f08' }
+        }));
+
+        // 3. 格式化连线数据给 ECharts
+        backendGraphData.value.links = links.map(l => ({
+          source: l.sourceName,
+          target: l.targetName,
+          value: l.relationValue
+        }));
+
+        console.log("🔥 后端图谱数据加载完毕！", backendGraphData.value);
+        
+        // 如果当前正处于关系图谱模式，自动刷新画布展示最新数据
+        if (currentMode.value === 'relation' && myChart) {
+          switchMode('relation')
+        }
+      }
+    },
+    fail: (err) => {
+      console.error("请求后端接口失败，请检查 SpringBoot 是否启动", err);
+      uni.showToast({ title: '图谱数据加载失败', icon: 'none' });
+    }
+  });
+}
+
+// 🌟 模式 A：主题图谱 (树状径向展开结构 - 保持不变，作为大类引导)
 const getThemeOption = () => {
   return {
     backgroundColor: 'transparent',
     series: [
       {
         type: 'tree',
-        layout: 'radial', // 径向布局 (环形辐射)
+        layout: 'radial', 
         symbol: 'circle',
-        symbolSize: (value, params) => params.data.children ? 50 : 40, // 有子节点的圆大一点
-        initialTreeDepth: 1, // 默认只展开第一层级！
+        symbolSize: (value, params) => params.data.children ? 50 : 40, 
+        initialTreeDepth: 1, 
         animationDurationUpdate: 750,
         itemStyle: { color: '#2c1d11', borderColor: '#d4af37', borderWidth: 2, shadowBlur: 10, shadowColor: 'rgba(212,175,55,0.5)' },
         lineStyle: { color: '#d4af37', width: 2, curveness: 0.3, opacity: 0.6 },
@@ -94,7 +144,7 @@ const getThemeOption = () => {
         data: [
           {
             name: '太和脊兽',
-            itemStyle: { color: '#9b2226', borderColor: '#fce8b2', borderWidth: 3 }, // 中心点朱红色
+            itemStyle: { color: '#9b2226', borderColor: '#fce8b2', borderWidth: 3 }, 
             children: [
               {
                 name: '神兽图鉴',
@@ -126,7 +176,7 @@ const getThemeOption = () => {
   }
 }
 
-// 🌟 模式 B：关系图谱 (力导向网状结构，就是我们之前的代码)
+// 🌟 模式 B：关系图谱 (力导向网状结构 - 彻底接入后端真实数据)
 const getRelationOption = () => {
   return {
     backgroundColor: 'transparent',
@@ -139,23 +189,9 @@ const getRelationOption = () => {
         edgeLabel: { show: true, fontSize: 10, color: 'rgba(212, 175, 55, 0.8)', formatter: '{c}' },
         lineStyle: { color: '#d4af37', width: 1.5, opacity: 0.6, curveness: 0.15 },
         itemStyle: { borderColor: '#fce8b2', borderWidth: 2, shadowBlur: 15, shadowColor: 'rgba(212, 175, 55, 0.6)' },
-        data: [
-          { name: '太和殿脊兽', symbolSize: 80, itemStyle: { color: '#9b2226' }, label: { color: '#fce8b2' } },
-          { name: '最高建制', symbolSize: 55, itemStyle: { color: '#8c2a2a' }, label: { color: '#fce8b2' } },
-          { name: '仙人骑凤', symbolSize: 60, itemStyle: { color: '#d4af37' } },
-          { name: '嘲风', symbolSize: 50, itemStyle: { color: '#eac56b' } },
-          { name: '螭吻', symbolSize: 50, itemStyle: { color: '#eac56b' } },
-          { name: '避火防灾', symbolSize: 35, itemStyle: { color: '#523620' }, label: { color: '#ccc' } },
-          { name: '逢凶化吉', symbolSize: 35, itemStyle: { color: '#523620' }, label: { color: '#ccc' } }
-        ],
-        links: [
-          { source: '太和殿脊兽', target: '最高建制', value: '所属' },
-          { source: '最高建制', target: '仙人骑凤', value: '排头' },
-          { source: '最高建制', target: '嘲风', value: '顺位3' },
-          { source: '最高建制', target: '螭吻', value: '正脊' },
-          { source: '仙人骑凤', target: '逢凶化吉', value: '寓意' },
-          { source: '螭吻', target: '避火防灾', value: '技能' }
-        ]
+        // 关键点：直接把后端的数据喂给 ECharts！
+        data: backendGraphData.value.nodes,
+        links: backendGraphData.value.links
       }
     ]
   }
@@ -166,16 +202,22 @@ const switchMode = (mode) => {
   if (currentMode.value === mode || !myChart) return
   currentMode.value = mode
   
-  // 清除旧图表，重新注入新配置，开启 true 表示不合并配置
   myChart.clear()
   if (mode === 'theme') {
     myChart.setOption(getThemeOption(), true)
   } else {
+    // 切换到关系图谱时，如果后端数据还没回来，可以给个提示
+    if (backendGraphData.value.nodes.length === 0) {
+      uni.showToast({ title: '图谱羁绊正在构建中...', icon: 'none' })
+    }
     myChart.setOption(getRelationOption(), true)
   }
 }
 
 onMounted(() => {
+  // 页面加载时，立刻向后端请求真实数据
+  fetchGraphData();
+
   setTimeout(async () => {
     if (!chartRef.value) return
     myChart = await chartRef.value.init(echarts)
@@ -186,8 +228,7 @@ onMounted(() => {
     // 监听节点点击事件
     myChart.on('click', (params) => {
       const nodeName = params.name
-      // 只有我们在字典里配置了详情的节点，才会弹出卡片
-      // 如果点击的是 "神兽图鉴" 这种分类节点，Echarts 会自动处理展开/折叠动画
+      // 只要后端返回的数据里配了详情，就能弹窗！
       if (nodeDetailDict[nodeName]) {
         currentNode.value = { name: nodeName, ...nodeDetailDict[nodeName] }
         showPopup.value = true
